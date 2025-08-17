@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <title>Latihan Video Call</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0; padding: 0; background: #000;
+      font-family: "Segoe UI", sans-serif; color:#fff;
+      height: 100vh; display:flex; flex-direction:column;
+    }
+    header { text-align:center; padding:10px; background:#222; }
+    h2 { margin:0; font-size:1.2rem; }
+
+    .video-wrapper {
+      flex:1; position:relative; background:#000;
+    }
+    #remoteVideo {
+      width:100%; height:100%; object-fit:cover;
+      background:#000;
+    }
+    #localVideo {
+      position:absolute; bottom:90px; right:10px;
+      width:120px; height:90px; border-radius:8px;
+      background:#000; border:2px solid #fff;
+      object-fit:cover;
+    }
+
+    .controls {
+      display:flex; justify-content:center; flex-wrap:wrap;
+      gap:10px; padding:12px; background:#222;
+    }
+    button, select {
+      padding:10px 14px; border:none; border-radius:8px;
+      font-weight:600; cursor:pointer; transition:0.2s;
+    }
+    button { color:#fff; }
+    #startBtn { background:#28a745; }
+    #callBtn { background:#007bff; }
+    #answerBtn { background:#17a2b8; }
+    #hangupBtn { background:#dc3545; }
+    select { background:#444; color:#fff; }
+  </style>
+</head>
+<body>
+  <header><h2>📱 Video Call WebRTC</h2></header>
+
+  <div class="video-wrapper">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted></video>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn">Start Kamera</button>
+    <button id="callBtn">Buat Panggilan</button>
+    <button id="answerBtn">Jawab</button>
+    <button id="hangupBtn">Matikan</button>
+    <select id="ringtoneSelect">
+      <option value="ring1.mp3">🔔 Nada 1</option>
+      <option value="ring2.mp3">🔔 Nada 2</option>
+      <option value="ring3.mp3">🔔 Nada 3</option>
+    </select>
+    <select id="qualitySelect">
+      <option value="low">🔋 Hemat Kuota</option>
+      <option value="high" selected>🌐 Kualitas Tinggi</option>
+    </select>
+  </div>
+
+  <audio id="ringtone" loop></audio>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-auth.js";
+
+   const firebaseConfig = {
+  apiKey: "AIzaSyDJmgQ6VUSGNXeUxnyIgTUmt6j90p8CuJA",
+  authDomain: "cam4all-82c58.firebaseapp.com",
+  databaseURL: "https://cam4all-82c58-default-rtdb.firebaseio.com",
+  projectId: "cam4all-82c58",
+  storageBucket: "cam4all-82c58.firebasestorage.app",
+  messagingSenderId: "1047523885224",
+  appId: "1:1047523885224:web:662731cc217b6da13f029d"
+};
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const auth = getAuth(app);
+
+    signInAnonymously(auth).then(()=>console.log("✅ Signed in"));
+
+    const localVideo = document.getElementById("localVideo");
+    const remoteVideo = document.getElementById("remoteVideo");
+    const startBtn = document.getElementById("startBtn");
+    const callBtn = document.getElementById("callBtn");
+    const answerBtn = document.getElementById("answerBtn");
+    const hangupBtn = document.getElementById("hangupBtn");
+    const ringtone = document.getElementById("ringtone");
+    const ringtoneSelect = document.getElementById("ringtoneSelect");
+    const qualitySelect = document.getElementById("qualitySelect");
+
+    let localStream, pc;
+
+    ringtone.src = ringtoneSelect.value;
+    ringtoneSelect.onchange = ()=>{ ringtone.src = ringtoneSelect.value; };
+
+    startBtn.onclick = async () => {
+      const mode = qualitySelect.value;
+      let constraints = (mode==="low") ?
+        { video:{width:240,height:180,frameRate:12}, audio:true } :
+        { video:{width:320,height:240,frameRate:15}, audio:true };
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      localVideo.srcObject = localStream;
+    };
+
+    function createPeerConnection(){
+      pc = new RTCPeerConnection();
+      pc.onicecandidate = e=>{
+        if(e.candidate){ set(ref(db,"call/candidate"), JSON.stringify(e.candidate)); }
+      };
+      pc.ontrack = e=>{ remoteVideo.srcObject = e.streams[0]; };
+      localStream.getTracks().forEach(track=>pc.addTrack(track, localStream));
+    }
+
+    callBtn.onclick = async () => {
+      createPeerConnection();
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await set(ref(db,"call/offer"), JSON.stringify(offer));
+
+      onValue(ref(db,"call/answer"), async snap=>{
+        if(snap.val()){ await pc.setRemoteDescription(JSON.parse(snap.val())); }
+      });
+      onValue(ref(db,"call/candidate"), async snap=>{
+        if(snap.val()){ try{ await pc.addIceCandidate(JSON.parse(snap.val())); }catch{} }
+      });
+    };
+
+    answerBtn.onclick = async () => {
+      createPeerConnection();
+      onValue(ref(db,"call/offer"), async snap=>{
+        if(snap.val()){
+          ringtone.play().catch(()=>{});
+          await pc.setRemoteDescription(JSON.parse(snap.val()));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await set(ref(db,"call/answer"), JSON.stringify(answer));
+          ringtone.pause(); ringtone.currentTime=0;
+        }
+      });
+      onValue(ref(db,"call/candidate"), async snap=>{
+        if(snap.val()){ try{ await pc.addIceCandidate(JSON.parse(snap.val())); }catch{} }
+      });
+    };
+
+    hangupBtn.onclick = ()=>{
+      if(pc){ pc.close(); pc=null; }
+      if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localVideo.srcObject=null; }
+      remoteVideo.srcObject=null;
+      set(ref(db,"call"), null);
+      ringtone.pause(); ringtone.currentTime=0;
+      alert("Panggilan dimatikan");
+    };
+  </script>
+</body>
+</html>
